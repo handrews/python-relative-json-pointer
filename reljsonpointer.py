@@ -1,9 +1,20 @@
+# -*- coding: utf-8 -*-
+
+__author__ = 'Henry Andrews <andrews_henry@yahoo.com>'
+__version__ = '0.1'
+__website__ = 'https://github.com/handrews/python-relative-json-pointer'
+__license__ = 'MIT'
+
+"""Implementation of the draft Relative JSON Pointer Specification"""
+
 import re
 from collections.abc import Sequence
 from itertools import chain
-from jsonpointer import JsonPointer, JsonPointerException, unescape
+from jsonpointer import JsonPointer, JsonPointerException, EndOfList, unescape
 
-INDEX_MANIP = re.compile(r'^(?P<up>\d+)(?P<over>[-+]\d+)$')
+_INDEX_MANIP = re.compile(r'^(?P<up>\d+)(?P<over>[-+]\d+)$')
+
+_DEFAULT = object()
 
 
 class RelJsonPointerException(Exception):
@@ -26,20 +37,15 @@ class RelJsonPointerRootNameException(RelJsonPointerException):
 
 class RelJsonPointerIndexTypeException(RelJsonPointerException):
     def __init__(self, over_count, last):
-        super().__init__(
-            f'Cannot add {over_count} to a non-integer index {last}'
-        )
-
-
-class RelJsonPointerIndexException(RelJsonPointerException):
-    def __init__(self, over_count, initial_index, length):
-        super().__init__(
-            f'Cannot go over {over_count} from {initial_index} ' +
-            f'in list of length {length}'
-        )
+        if last is None:
+            msg = 'Cannot treat root pointer as index'
+        else:
+            msg = f'Cannot add {over_count} to a non-integer index "{last}"'
+        super().__init__(msg)
 
 
 class RelJsonPointerEndOfListException(RelJsonPointerException):
+    # TODO: Better
     def __init__(self, full):
         super().__init__(
             'Cannot resolve pointer with "-" index except to ' +
@@ -47,7 +53,7 @@ class RelJsonPointerEndOfListException(RelJsonPointerException):
         )
 
 
-class RelNotAbsoluteJsonPointerException:
+class RelNotAbsoluteJsonPointerException(RelJsonPointerException):
     def __init__(self, pointer):
         super().__init__(
             f'Cannot use non-relative JSON pointer {pointer} as relative ' +
@@ -55,7 +61,7 @@ class RelNotAbsoluteJsonPointerException:
         )
 
 
-class RelJsonPointerInvalidPrefixException:
+class RelJsonPointerInvalidPrefixException(RelJsonPointerException):
     def __init__(self, prefix):
         super().__init__(
             f'Relative JSON Pointer prefix "{prefix}" must start with a ' +
@@ -65,7 +71,7 @@ class RelJsonPointerInvalidPrefixException:
 
 
 class RelJsonPointer:
-    def __init__(self, relpointer, strict=True):
+    def __init__(self, relpointer):
         self._use_name_of_last = False
         self._over_count = 0
         self._up_count = 0
@@ -74,10 +80,7 @@ class RelJsonPointer:
         relparts = [unescape(p) for p in relpointer.split('/')]
         prefix = relparts[0]
         if prefix == '':
-            if strict:
-                raise RelNotAbsoluteJsonPointerException(relpointer)
-            self._pointer = JsonPointer.from_parts(relparts)
-            return
+            raise RelNotAbsoluteJsonPointerException(relpointer)
 
         if len(relparts) == 1:
             if prefix.endswith('#'):
@@ -93,13 +96,13 @@ class RelJsonPointer:
         try:
             self._up_count = int(prefix)
         except ValueError:
-            m = INDEX_MANIP.search(prefix)
+            m = _INDEX_MANIP.search(prefix)
             if m is None:
                 raise RelJsonPointerInvalidPrefixException(prefix)
             self._up_count = int(m.group('up'))
             self._over_count = int(m.group('over'))
 
-    def resolve(self, doc, base):
+    def resolve(self, doc, base, default=_DEFAULT, no_eol=False):
         if isinstance(base, str):
             base = JsonPointer(base)
 
@@ -112,13 +115,21 @@ class RelJsonPointer:
         if self._use_name_of_last and new_length < 1:
             raise RelJsonPointerRootNameException()
 
+        parts = parts[:new_length]
+
         if self._over_count:
             try:
                 index = int(parts[-1])
                 parts[-1] = str(index + self._over_count)
-            except TypeError:
+            except ValueError:
                 raise RelJsonPointerIndexTypeException(
-                    self._over_count, parts[-1]
+                    self._over_count,
+                    parts[-1],
+                )
+            except IndexError:
+                raise RelJsonPointerIndexTypeException(
+                    self._over_count,
+                    None,
                 )
 
         full = JsonPointer.from_parts(
@@ -141,10 +152,16 @@ class RelJsonPointer:
             except JsonPointerException as jpe:
                 if 'jsonpointer.EndOfList' in str(jpe):
                     raise RelJsonPointerEndOfListException(full)
+                raise
 
-        try:
-            return full.resolve(doc)
-        except JsonPointerException as jpe:
-            if 'jsonpointer.EndOfList' in str(jpe):
-                raise RelJsonPointerEndOfListException(full)
-            raise
+        if default == _DEFAULT:
+            # Because of how JsonPointer implements checking for
+            # a default (which we copied here), we need to omit
+            # the parameter when we forward the call.
+            result = full.resolve(doc)
+        else:
+            result = full.resolve(doc, default)
+        if no_eol and isinstance(result, EndOfList):
+            raise RelJsonPointerEndOfListException(full)
+
+        return result
