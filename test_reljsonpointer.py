@@ -67,12 +67,44 @@ class TestConstructor:
             RelJsonPointer('-1')
 
 
-class TestZeroAlone:
-    rjp = RelJsonPointer('0')
-
+class TestToAbsolute:
     def test_root(self):
-        doc = {}
-        assert id(self.rjp.resolve(doc, '')) == id(doc)
+        assert RelJsonPointer('0').to_absolute(JsonPointer('')) == \
+            (JsonPointer(''), False)
+
+    def test_up(self):
+        assert RelJsonPointer('1').to_absolute('/foo/0') == \
+            (JsonPointer('/foo'), False)
+
+    def test_forwards(self):
+        assert RelJsonPointer('0+2').to_absolute('/10') == \
+            (JsonPointer('/12'), False)
+
+    def test_negative_index(self):
+        assert RelJsonPointer('1-3').to_absolute('/1/bar') == \
+            (JsonPointer('/-2'), False)
+
+    def test_hash(self):
+        assert RelJsonPointer('0#').to_absolute('/') == \
+            (JsonPointer('/'), True)
+
+    def test_manipulation_and_hash(self):
+        # See https://github.com/json-schema-org/json-schema-spec/issues/1175
+        # for questions as to whether this is part of the spec or not.
+        assert RelJsonPointer('0-1#').to_absolute('/1') == \
+            (JsonPointer('/0'), True)
+
+    def test_manipulation_root(self):
+        with pytest.raises(RelJsonPointerRootManipulationException):
+            RelJsonPointer('1-2').to_absolute('/foo')
+
+    def test_manipulation_object(self):
+        with pytest.raises(RelJsonPointerIndexTypeException):
+            RelJsonPointer('0+1/foo').to_absolute('/whoops')
+
+
+class TestResolve:
+    rjp = RelJsonPointer('0')
 
     def test_property(self):
         doc = {'foo': {'bar': 1}}
@@ -94,7 +126,7 @@ class TestZeroAlone:
         assert id(self.rjp.resolve({}, '/foo', default)) == id(default)
 
 
-class TestHash:
+class TestResolveWithHash:
     rjp = RelJsonPointer('1#')
 
     def test_depth(self):
@@ -124,31 +156,6 @@ class TestHash:
     def test_no_property(self):
         with pytest.raises(RelJsonPointerDoesNotExistException):
             RelJsonPointer('0#').resolve({'foo': 1, 'bar': 2}, '/baz')
-
-
-class TestIndexManipulation:
-    def test_forward(self):
-        assert RelJsonPointer('0+1').resolve([88, 42], '/0') == 42
-
-    def test_backwards(self):
-        rjp = RelJsonPointer('1-2/a')
-        print(f'{rjp._pointer}, {rjp._up_count}, {rjp._over_count}')
-        doc = [{'a': 1}, {'b': 2}, {'c': 3}]
-        assert rjp.resolve(doc, '/2/c') == 1
-
-    def test_index_root(self):
-        with pytest.raises(RelJsonPointerRootManipulationException):
-            RelJsonPointer('1-2').resolve(
-                {'foo': 'bar'},
-                '/foo',
-            )
-
-    def test_index_object(self):
-        with pytest.raises(RelJsonPointerIndexTypeException):
-            RelJsonPointer('0+1/foo').resolve(
-                {'whoops': {'foo'}},
-                '/whoops',
-            )
 
     def test_index_with_use_last(self):
         # See https://github.com/json-schema-org/json-schema-spec/issues/1175
