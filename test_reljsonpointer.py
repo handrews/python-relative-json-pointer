@@ -2,13 +2,15 @@ import pytest
 from reljsonpointer import (
     RelJsonPointer,
     RelJsonPointerDepthException,
+    RelJsonPointerRootNameException,
+    RelJsonPointerRootManipulationException,
     RelJsonPointerEndOfListException,
     RelJsonPointerIndexTypeException,
     RelJsonPointerInvalidPrefixException,
-    RelJsonPointerRootNameException,
+    RelJsonPointerDoesNotExistException,
     RelNotAbsoluteJsonPointerException,
 )
-from jsonpointer import EndOfList
+from jsonpointer import JsonPointer, EndOfList
 
 
 class TestConstructor:
@@ -52,6 +54,10 @@ class TestConstructor:
         with pytest.raises(RelJsonPointerInvalidPrefixException):
             RelJsonPointer('abc/def')
 
+    def test_malformed_index_operator(self):
+        with pytest.raises(RelJsonPointerInvalidPrefixException):
+            RelJsonPointer('0*1/foo')
+
     def test_hash_without_numeric_prefix(self):
         with pytest.raises(RelJsonPointerInvalidPrefixException):
             RelJsonPointer('#')
@@ -70,11 +76,11 @@ class TestZeroAlone:
 
     def test_property(self):
         doc = {'foo': {'bar': 1}}
-        assert id(self.rjp.resolve(doc, '/foo')) == id(doc['foo'])
+        assert id(self.rjp.resolve(doc, JsonPointer('/foo'))) == id(doc['foo'])
 
     def test_index(self):
         doc = [{'thing': 'stuff'}]
-        assert id(self.rjp.resolve(doc, '/0')) == id(doc[0])
+        assert id(self.rjp.resolve(doc, JsonPointer('/0'))) == id(doc[0])
 
     def test_end_of_list(self):
         assert isinstance(self.rjp.resolve([0, 1, 2], '/-'), EndOfList)
@@ -111,6 +117,14 @@ class TestHash:
         with pytest.raises(RelJsonPointerRootNameException):
             RelJsonPointer('0#').resolve({}, '')
 
+    def test_no_index(self):
+        with pytest.raises(RelJsonPointerDoesNotExistException):
+            RelJsonPointer('0#').resolve(['foo', 'bar'], '/2')
+
+    def test_no_property(self):
+        with pytest.raises(RelJsonPointerDoesNotExistException):
+            RelJsonPointer('0#').resolve({'foo': 1, 'bar': 2}, '/baz')
+
 
 class TestIndexManipulation:
     def test_forward(self):
@@ -123,17 +137,14 @@ class TestIndexManipulation:
         assert rjp.resolve(doc, '/2/c') == 1
 
     def test_index_root(self):
-        with pytest.raises(RelJsonPointerIndexTypeException, match='root'):
+        with pytest.raises(RelJsonPointerRootManipulationException):
             RelJsonPointer('1-2').resolve(
                 {'foo': 'bar'},
                 '/foo',
             )
 
     def test_index_object(self):
-        with pytest.raises(
-            RelJsonPointerIndexTypeException,
-            match='non-integer index "whoops"',
-        ):
+        with pytest.raises(RelJsonPointerIndexTypeException):
             RelJsonPointer('0+1/foo').resolve(
                 {'whoops': {'foo'}},
                 '/whoops',

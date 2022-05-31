@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from itertools import chain
 from jsonpointer import JsonPointer, JsonPointerException, EndOfList, unescape
 
-_INDEX_MANIP = re.compile(r'^(?P<up>\d+)(?P<over>[-+]\d+)$')
+_PREFIX = re.compile(r'^(?P<up>\d+)(?P<over>[-+]\d+)$')
 
 _DEFAULT = object()
 
@@ -35,17 +35,21 @@ class RelJsonPointerRootNameException(RelJsonPointerException):
         )
 
 
+class RelJsonPointerRootManipulationException(RelJsonPointerException):
+    def __init__(self):
+        super().__init__(
+            "Cannot manipulate the index of the document root"
+        )
+
+
 class RelJsonPointerIndexTypeException(RelJsonPointerException):
     def __init__(self, over_count, last):
-        if last is None:
-            msg = 'Cannot treat root pointer as index'
-        else:
-            msg = f'Cannot add {over_count} to a non-integer index "{last}"'
-        super().__init__(msg)
+        super().__init__(
+            f'Cannot add {over_count} to a non-integer index "{last}"'
+        )
 
 
 class RelJsonPointerEndOfListException(RelJsonPointerException):
-    # TODO: Better
     def __init__(self, full):
         super().__init__(
             'Cannot resolve pointer with "-" index except to ' +
@@ -67,6 +71,14 @@ class RelJsonPointerInvalidPrefixException(RelJsonPointerException):
             f'Relative JSON Pointer prefix "{prefix}" must start with a ' +
             'non-negative integer, optionally followed by "-" or "+" and ' +
             'another non-negative integer.'
+        )
+
+
+class RelJsonPointerDoesNotExistException(RelJsonPointerException):
+    def __init__(self, full):
+        super().__init__(
+            f'Resolved JSON Pointer "{full}" points to a non-existant' +
+            'instance location.'
         )
 
 
@@ -96,13 +108,13 @@ class RelJsonPointer:
         try:
             self._up_count = int(prefix)
         except ValueError:
-            m = _INDEX_MANIP.search(prefix)
+            m = _PREFIX.search(prefix)
             if m is None:
                 raise RelJsonPointerInvalidPrefixException(prefix)
             self._up_count = int(m.group('up'))
             self._over_count = int(m.group('over'))
 
-    def resolve(self, doc, base, default=_DEFAULT, no_eol=False):
+    def to_absolute(self, base):
         if isinstance(base, str):
             base = JsonPointer(base)
 
@@ -127,16 +139,17 @@ class RelJsonPointer:
                     parts[-1],
                 )
             except IndexError:
-                raise RelJsonPointerIndexTypeException(
-                    self._over_count,
-                    None,
-                )
+                # Not enough parts, we tried to modify the index of root.
+                raise RelJsonPointerRootManipulationException()
 
         full = JsonPointer.from_parts(
             chain(parts[:new_length], self._pointer.get_parts())
         )
+        return full, self._use_name_of_last
 
-        if self._use_name_of_last:
+    def resolve(self, doc, base, default=_DEFAULT, no_eol=False):
+        full, use_name_of_last = self.to_absolute(base)
+        if use_name_of_last:
             try:
                 sub_doc, last = full.to_last(doc)
                 is_list = isinstance(sub_doc, Sequence)
@@ -149,18 +162,17 @@ class RelJsonPointer:
                 # We won't get a TypeError on this int() because
                 # JsonPointer.walk() would have raised an exception already.
                 return int(last) if is_list else last
-            except JsonPointerException as jpe:
-                if 'jsonpointer.EndOfList' in str(jpe):
-                    raise RelJsonPointerEndOfListException(full)
-                raise
+            except JsonPointerException:
+                raise RelJsonPointerDoesNotExistException(full)
 
-        if default == _DEFAULT:
+        elif default == _DEFAULT:
             # Because of how JsonPointer implements checking for
             # a default (which we copied here), we need to omit
             # the parameter when we forward the call.
             result = full.resolve(doc)
         else:
             result = full.resolve(doc, default)
+
         if no_eol and isinstance(result, EndOfList):
             raise RelJsonPointerEndOfListException(full)
 
